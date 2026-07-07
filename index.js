@@ -1,5 +1,5 @@
 const express=require("express");
-const EfiPay=require("efi-pay-sdk");
+const EfiPay=require("sdk-node-apis-efi");
 const QRCode=require("qrcode");
 const app=express();
 app.use(express.json());
