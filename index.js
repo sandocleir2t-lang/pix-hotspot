@@ -1,51 +1,53 @@
-const express = require('express');
-const cors = require('cors');
-const fs = require('fs');
-const EfiPay = require('sdk-node-apis-efi');
-require('dotenv').config();
+const EfiPay = require('sdk-node-apis-efi')
+const fs = require('fs')
+const express = require('express')
+const app = express()
+app.use(express.json())
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// Lê o certificado base64 e converte pra Buffer
-const certificado = Buffer.from(
-  fs.readFileSync(process.env.EFI_CERT_PATH, 'utf8'), 
-  'base64'
-);
+// CORREÇÃO: Lê o arquivo .b64 e converte pra buffer .p12
+const certBase64 = fs.readFileSync(process.env.EFI_CERT_PATH, 'utf8')
+const certificado = Buffer.from(certBase64, 'base64')
 
 const options = {
-  sandbox: false, // MUDE PRA false se seu cert é de PRODUÇÃO
+  sandbox: false, // ← IMPORTANTE: false pra produção
   client_id: process.env.EFI_CLIENT_ID,
   client_secret: process.env.EFI_CLIENT_SECRET,
-  certificate: certificado, // TEM QUE SER O BUFFER, não o caminho
+  certificate: certificado, // ← TEM QUE SER O BUFFER .p12
   cert_base64: false
-};
+}
 
-const efipay = new EfiPay(options);
+const efipay = new EfiPay(options)
 
 app.post('/criar-cobranca', async (req, res) => {
   try {
-    const { valor, nome, cpf } = req.body;
+    const { valor, nome, cpf } = req.body
     
     const body = {
       calendario: { expiracao: 3600 },
-      devedor: { cpf, nome },
+      devedor: { cpf: cpf, nome: nome },
       valor: { original: valor.toFixed(2) },
       chave: process.env.EFI_PIX_KEY,
-      solicitacaoPagador: "Acesso Hotspot WiFi"
-    };
-
-    const response = await efipay.pixCreateImmediateCharge([], body);
-    res.status(200).json(response);
+      solicitacaoPagador: 'Pagamento Hotspot'
+    }
+    
+    const response = await efipay.pixCreateImmediateCharge([], body)
+    
+    const params = { id: response.loc.id }
+    const qrcode = await efipay.pixGenerateQRCode(params)
+    
+    res.json({
+      txid: response.txid,
+      pixCopiaECola: qrcode.qrcode,
+      qrcode: qrcode.imagemQrcode
+    })
     
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
+    console.error('Erro Efí:', error)
+    res.status(500).json({ error: error.message })
   }
-});
+})
 
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 10000
 app.listen(PORT, () => {
-  console.log('Servidor rodando na porta', PORT);
-});
+  console.log('Servidor rodando na porta ' + PORT)
+})
