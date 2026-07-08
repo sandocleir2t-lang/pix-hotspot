@@ -14,11 +14,11 @@ const p12Buffer = Buffer.from(p12Base64, 'base64')
 // Cria o agente HTTPS pra Efí - certificado SEM SENHA
 const agent = new https.Agent({
   pfx: p12Buffer,
-  passphrase: '' // STRING VAZIA - ISSO RESOLVE O ERR_INVALID_ARG_TYPE
+  passphrase: '' 
 })
 
-// Configuração do axios pra Efí
-const efíApi = axios.create({
+// Configuração do axios pra Efí - SEM ACENTO
+const efiApi = axios.create({
   baseURL: 'https://api.efipay.com.br',
   httpsAgent: agent,
   headers: {
@@ -26,26 +26,24 @@ const efíApi = axios.create({
   }
 })
 
-// Sua rota aqui
+// Rota raiz
 app.get('/', (req, res) => {
   res.send('API Pix Hotspot rodando')
 })
 
-const PORT = process.env.PORT || 3000
+// Rota de teste mTLS
 app.get('/teste-efi', async (req, res) => {
   try {
-    // 1. Pega o token OAuth da Efí
     const auth = Buffer.from(`${process.env.EFI_CLIENT_ID}:${process.env.EFI_CLIENT_SECRET}`).toString('base64')
     
-    const tokenResponse = await efíApi.post('/v1/oauth/token', 
+    const tokenResponse = await efiApi.post('/v1/oauth/token', 
       { grant_type: 'client_credentials' },
       { headers: { Authorization: `Basic ${auth}` } }
     )
     
     const accessToken = tokenResponse.data.access_token
     
-    // 2. Cria cobrança imediata de R$ 0,01
-    const cobResponse = await efíApi.post('/v2/cob', 
+    const cobResponse = await efiApi.post('/v2/cob', 
       {
         calendario: { expiracao: 3600 },
         valor: { original: '0.01' },
@@ -65,8 +63,9 @@ app.get('/teste-efi', async (req, res) => {
       erro: 'Falhou',
       detalhe: err.response?.data || err.message 
     })
- }
-});
+  }
+})
 
+// DECLARA PORT SÓ 1 VEZ AQUI NO FINAL
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`))
