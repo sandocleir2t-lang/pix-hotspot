@@ -1,18 +1,21 @@
-const EfiPay = require('sdk-node-apis-efi')
-const fs = require('fs')
 const express = require('express')
+const cors = require('cors')
+const fs = require('fs')
+const EfiPay = require('sdk-node-apis-efi')
+
 const app = express()
+app.use(cors())
 app.use(express.json())
 
-// CORREÇÃO: Lê o arquivo .b64 e converte pra buffer .p12
+// Lê o certificado base64 e converte pra buffer .p12
 const certBase64 = fs.readFileSync(process.env.EFI_CERT_PATH, 'utf8')
 const certificado = Buffer.from(certBase64, 'base64')
 
 const options = {
-  sandbox: false, // ← IMPORTANTE: false pra produção
+  sandbox: false, // PRODUÇÃO = false
   client_id: process.env.EFI_CLIENT_ID,
   client_secret: process.env.EFI_CLIENT_SECRET,
-  certificate: certificado, // ← TEM QUE SER O BUFFER .p12
+  certificate: certificado,
   cert_base64: false
 }
 
@@ -24,30 +27,30 @@ app.post('/criar-cobranca', async (req, res) => {
     
     const body = {
       calendario: { expiracao: 3600 },
-      devedor: { cpf: cpf, nome: nome },
-      valor: { original: valor.toFixed(2) },
+      devedor: { cpf, nome },
+      valor: { original: Number(valor).toFixed(2) },
       chave: process.env.EFI_PIX_KEY,
       solicitacaoPagador: 'Pagamento Hotspot'
     }
     
-    const response = await efipay.pixCreateImmediateCharge([], body)
+    const cobranca = await efipay.pixCreateImmediateCharge([], body)
     
-    const params = { id: response.loc.id }
+    const params = { id: cobranca.loc.id }
     const qrcode = await efipay.pixGenerateQRCode(params)
     
-    res.json({
-      txid: response.txid,
+    res.status(200).json({
+      txid: cobranca.txid,
       pixCopiaECola: qrcode.qrcode,
       qrcode: qrcode.imagemQrcode
     })
     
   } catch (error) {
-    console.error('Erro Efí:', error)
-    res.status(500).json({ error: error.message })
+    console.error('Erro Efí:', error.data || error.message)
+    res.status(500).json({ error: error.data?.mensagem || error.message })
   }
 })
 
 const PORT = process.env.PORT || 10000
 app.listen(PORT, () => {
-  console.log('Servidor rodando na porta ' + PORT)
+  console.log('Servidor rodando na porta', PORT)
 })
