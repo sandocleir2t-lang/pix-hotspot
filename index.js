@@ -13,7 +13,6 @@ const options = {
 }
 const efipay = new EfiPay(options)
 
-// ROTA /PIX
 app.post('/pix', async (req, res) => {
   try {
     const body = {
