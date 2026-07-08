@@ -6,7 +6,6 @@ const express = require('express');
 const https = require('https');
 const fs = require('fs');
 const axios = require('axios');
-
 // 1. Validação de variáveis de ambiente
 const envsObrigatorias = [
   'EFI_CLIENT_ID',
@@ -22,6 +21,7 @@ for (const env of envsObrigatorias) {
   }
 }
 
+// EFI_CERT_PASSPHRASE pode ser vazia, então não valida
 // 2. Configura mTLS com certificado da Efí
 let httpsAgent;
 try {
