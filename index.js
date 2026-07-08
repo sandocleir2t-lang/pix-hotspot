@@ -8,15 +8,14 @@ const fs = require('fs');
 const axios = require('axios');
 
 // 1. Validação de variáveis de ambiente
-const envs = [
+const envsObrigatorias = [
   'EFI_CLIENT_ID',
   'EFI_CLIENT_SECRET',
   'EFI_PIX_KEY',
-  'EFI_CERT_PATH',
-  'EFI_CERT_PASSPHRASE'
+  'EFI_CERT_PATH'
 ];
 
-for (const env of envs) {
+for (const env of envsObrigatorias) {
   if (!process.env[env]) {
     console.error(`❌ ERRO: Variável ${env} não configurada!`);
     process.exit(1);
