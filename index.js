@@ -61,10 +61,7 @@ app.get('/teste-efi', async (req, res) => {
   } catch (err) {
     res.status(500).json({ 
       erro: 'Falhou',
-        } catch (err) {
-    res.status(500).json({
-      erro: 'Falhou',
-      detalhe: err.response?.data || err.message
+       detalhe: err.response?.data || err.message
     })
   }
 });
