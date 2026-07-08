@@ -6,31 +6,37 @@ const express = require('express');
 const https = require('https');
 const fs = require('fs');
 const axios = require('axios');
-// 1. Validação de variáveis de ambiente
-const envsObrigatorias = [
+// 1. Validação de variáveis de ambiente - VERSÃO CORRIGIDA
+const envs = [
   'EFI_CLIENT_ID',
   'EFI_CLIENT_SECRET',
   'EFI_PIX_KEY',
   'EFI_CERT_PATH'
+  // EFI_CERT_PASSPHRASE é opcional, não valida aqui
 ];
 
-for (const env of envsObrigatorias) {
+for (const env of envs) {
   if (!process.env[env]) {
     console.error(`❌ ERRO: Variável ${env} não configurada!`);
     process.exit(1);
   }
 }
-
 // EFI_CERT_PASSPHRASE pode ser vazia, então não valida
-// 2. Configura mTLS com certificado da Efí
+// 2. Configura mTLS com certificado da Efí - VERSÃO CORRIGIDA
 let httpsAgent;
 try {
-  httpsAgent = new https.Agent({
+  const certOptions = {
     cert: fs.readFileSync(process.env.EFI_CERT_PATH),
     key: fs.readFileSync(process.env.EFI_CERT_PATH),
-    passphrase: process.env.EFI_CERT_PASSPHRASE,
     rejectUnauthorized: false
-  });
+  };
+
+  // Só adiciona passphrase se ela existir e não for vazia
+  if (process.env.EFI_CERT_PASSPHRASE) {
+    certOptions.passphrase = process.env.EFI_CERT_PASSPHRASE;
+  }
+
+  httpsAgent = new https.Agent(certOptions);
   console.log('✅ Certificado mTLS carregado com sucesso');
 } catch (err) {
   console.error('❌ ERRO ao carregar certificado:', err.message);
