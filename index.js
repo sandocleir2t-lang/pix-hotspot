@@ -65,5 +65,8 @@ app.get('/teste-efi', async (req, res) => {
       erro: 'Falhou',
       detalhe: err.response?.data || err.message 
     })
-  }
-})app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`))
+ }
+});
+
+const PORT = process.env.PORT || 3000
+app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`))
