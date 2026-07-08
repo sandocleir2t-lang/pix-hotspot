@@ -1,6 +1,6 @@
 // ========================================
 // API PIX HOTSPOT - Efí Bank + Express
-// Versão 1.0.2 - Suporte a certificado sem senha
+// Versão 1.0.4 - URL OAuth corrigida
 // ========================================
 
 const express = require('express');
@@ -8,7 +8,6 @@ const https = require('https');
 const fs = require('fs');
 const axios = require('axios');
 
-// 1. Validação de variáveis de ambiente - PASSPHRASE É OPCIONAL
 const envsObrigatorias = [
   'EFI_CLIENT_ID',
   'EFI_CLIENT_SECRET',
@@ -23,54 +22,36 @@ for (const env of envsObrigatorias) {
   }
 }
 
-// 2. Configura mTLS com certificado da Efí - ACEITA SENHA VAZIA
 let httpsAgent;
 try {
   const certPath = process.env.EFI_CERT_PATH;
   const certBuffer = fs.readFileSync(certPath);
   
-  const certOptions = {
+  httpsAgent = new https.Agent({
     cert: certBuffer,
     key: certBuffer,
     rejectUnauthorized: false
-  };
-
-  // Só adiciona passphrase se ela existir e não for string vazia
-  if (process.env.EFI_CERT_PASSPHRASE && process.env.EFI_CERT_PASSPHRASE.trim()!== '') {
-    certOptions.passphrase = process.env.EFI_CERT_PASSPHRASE;
-    console.log('🔐 Usando certificado com senha');
-  } else {
-    console.log('🔓 Usando certificado sem senha');
-  }
-
-  httpsAgent = new https.Agent(certOptions);
-  console.log('✅ Certificado mTLS carregado com sucesso');
+  });
+  console.log('✅ Certificado mTLS.pem carregado com sucesso');
 } catch (err) {
   console.error('❌ ERRO ao carregar certificado:', err.message);
-  console.error('Verifique se o arquivo existe em:', process.env.EFI_CERT_PATH);
   process.exit(1);
 }
 
-// 3. Instância Axios configurada pra Efí
 const efiApi = axios.create({
   baseURL: 'https://pix.api.efipay.com.br',
   httpsAgent: httpsAgent,
   timeout: 30000
 });
 
-// 4. Inicia Express
 const app = express();
 app.use(express.json());
-
-// ========================================
-// ROTAS
-// ========================================
 
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
     servico: 'API Pix Hotspot',
-    versao: '1.0.2',
+    versao: '1.0.4',
     ambiente: process.env.NODE_ENV || 'development'
   });
 });
@@ -81,15 +62,15 @@ app.get('/teste-efi', async (req, res) => {
       `${process.env.EFI_CLIENT_ID}:${process.env.EFI_CLIENT_SECRET}`
     ).toString('base64');
 
-    const response = await efiApi.post('/v1/oauth/token',
+    // CORREÇÃO: URL é /oauth/token sem /v1
+    const response = await efiApi.post('/oauth/token',
       { grant_type: 'client_credentials' },
       { headers: { Authorization: `Basic ${auth}` } }
     );
 
     res.json({
       status: 'MTLS FUNCIONOU!',
-      token_expira_em: response.data.expires_in,
-      certificado: process.env.EFI_CERT_PASSPHRASE? 'com senha' : 'sem senha'
+      token_expira_em: response.data.expires_in
     });
   } catch (err) {
     console.error('ERRO /teste-efi:', err.response?.data || err.message);
@@ -119,12 +100,12 @@ app.post('/cobrar', async (req, res) => {
       });
     }
 
-    console.log('🔐 Gerando token OAuth...');
     const auth = Buffer.from(
       `${process.env.EFI_CLIENT_ID}:${process.env.EFI_CLIENT_SECRET}`
     ).toString('base64');
 
-    const tokenResponse = await efiApi.post('/v1/oauth/token',
+    // CORREÇÃO: URL é /oauth/token sem /v1
+    const tokenResponse = await efiApi.post('/oauth/token',
       { grant_type: 'client_credentials' },
       { headers: { Authorization: `Basic ${auth}` } }
     );
@@ -145,21 +126,18 @@ app.post('/cobrar', async (req, res) => {
       };
     }
 
-    console.log(`💰 Criando cobrança de R$ ${valorFormatado}...`);
     const cobResponse = await efiApi.post('/v2/cob', bodyCob, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
 
     const { txid, pixCopiaECola, loc } = cobResponse.data;
 
-    console.log('📱 Gerando QR Code...');
     const qrcodeResponse = await efiApi.get(`/v2/loc/${loc.id}/qrcode`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
 
     const qrCodeBase64 = qrcodeResponse.data.imagemQrcode;
 
-    console.log(`✅ Cobrança criada: ${txid}`);
     res.json({
       status: 'Cobranca criada com sucesso',
       txid: txid,
@@ -185,9 +163,6 @@ app.use((req, res) => {
   res.status(404).json({ erro: 'Rota não encontrada' });
 });
 
-// ========================================
-// INICIA SERVIDOR - SEMPRE POR ÚLTIMO
-// ========================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
