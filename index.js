@@ -3,7 +3,7 @@ const EfiPay = require('sdk-node-apis-efi')
 const app = express()
 app.use(express.json())
 
-// Config PRODUÇÃO
+// Configuração PRODUÇÃO
 const options = {
   sandbox: false,
   client_id: process.env.EFI_CLIENT_ID,
@@ -13,7 +13,7 @@ const options = {
 }
 const efipay = new EfiPay(options)
 
-// ROTA /PIX QUE TÁ FALTANDO
+// ROTA /PIX
 app.post('/pix', async (req, res) => {
   try {
     const body = {
