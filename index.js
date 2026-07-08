@@ -67,6 +67,8 @@ app.get('/teste-efi', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || 3000
+
 // ROTA PRA GERAR COBRANÇA PIX DINÂMICA
 app.post('/cobrar', async (req, res) => {
   try {
@@ -126,10 +128,12 @@ app.post('/cobrar', async (req, res) => {
     })
     
   } catch (err) {
+    console.error('ERRO NA ROTA COBRAR:', err.response?.data || err.message)
     res.status(500).json({ 
       erro: 'Falha ao gerar cobrança',
       detalhe: err.response?.data || err.message 
     })
   }
 })
+
 app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`))
