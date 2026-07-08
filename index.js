@@ -1,53 +1,36 @@
-const express = require("express");
-const EfiPay = require("sdk-node-apis-efi");
-const QRCode = require("qrcode");
+const express = require('express')
+const EfiPay = require('sdk-node-apis-efi')
+const app = express()
+app.use(express.json())
 
-const app = express();
-app.use(express.json());
-
-const efi = new EfiPay({
+// Config PRODUÇÃO
+const options = {
+  sandbox: false,
   client_id: process.env.EFI_CLIENT_ID,
   client_secret: process.env.EFI_CLIENT_SECRET,
-  certificate: Buffer.from(process.env.EFI_CERT_BASE64, "base64"),
-  sandbox: false,
-});
+  certificate: Buffer.from(process.env.EFI_CERT_BASE64, 'base64'),
+  validateMtls: false
+}
+const efipay = new EfiPay(options)
 
-app.get("/", (req, res) => {
-  res.send("Pix Hotspot Online ✅");
-});
-
-app.get("/pix", async (req, res) => {
+// ROTA /PIX QUE TÁ FALTANDO
+app.post('/pix', async (req, res) => {
   try {
-    const valor = req.query.valor || "10.00";
-    
     const body = {
       calendario: { expiracao: 3600 },
-      valor: { original: valor },
+      valor: { original: req.body.valor || "5.00" },
       chave: process.env.EFI_PIX_KEY,
-      solicitacaoPagador: "Acesso Wi-Fi Hotspot"
-    };
-
-    const pix = await efi.pixCreateImmediateCharge([], body);
-    const qr = await efi.pixGenerateQRCode({ id: pix.loc.id });
-    const qrbase64 = await QRCode.toDataURL(qr.qrcode);
-
-    res.json({
-      txid: pix.txid,
-      pixCopiaECola: qr.qrcode,
-      qrcode: qrbase64,
-      valor: valor
-    });
+      solicitacaoPagador: "Hotspot SLS WIFI"
+    }
+    const response = await efipay.pixCreateImmediateCharge([], body)
+    res.status(200).json(response)
   } catch (error) {
-    console.error("ERRO COMPLETO EFI:", JSON.stringify(error, null, 2));
-    res.status(500).json({ 
-      error: "Erro ao gerar Pix",
-      codigo: error.code,
-      nome: error.error,
-      detalhe: error.error_description || error.message,
-      erro_completo: error
-    });
+    console.log(error)
+    res.status(500).json({ erro: "Erro ao gerar Pix", detalhes: error })
   }
-});
+})
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+const PORT = process.env.PORT || 10000
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`)
+})
