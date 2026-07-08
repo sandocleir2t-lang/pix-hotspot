@@ -1,45 +1,53 @@
 // ========================================
 // API PIX HOTSPOT - Efí Bank + Express
+// Versão 1.0.2 - Suporte a certificado sem senha
 // ========================================
 
 const express = require('express');
 const https = require('https');
 const fs = require('fs');
 const axios = require('axios');
-// 1. Validação de variáveis de ambiente - VERSÃO CORRIGIDA
-const envs = [
+
+// 1. Validação de variáveis de ambiente - PASSPHRASE É OPCIONAL
+const envsObrigatorias = [
   'EFI_CLIENT_ID',
   'EFI_CLIENT_SECRET',
   'EFI_PIX_KEY',
   'EFI_CERT_PATH'
-  // EFI_CERT_PASSPHRASE é opcional, não valida aqui
 ];
 
-for (const env of envs) {
+for (const env of envsObrigatorias) {
   if (!process.env[env]) {
     console.error(`❌ ERRO: Variável ${env} não configurada!`);
     process.exit(1);
   }
 }
-// EFI_CERT_PASSPHRASE pode ser vazia, então não valida
-// 2. Configura mTLS com certificado da Efí - VERSÃO CORRIGIDA
+
+// 2. Configura mTLS com certificado da Efí - ACEITA SENHA VAZIA
 let httpsAgent;
 try {
+  const certPath = process.env.EFI_CERT_PATH;
+  const certBuffer = fs.readFileSync(certPath);
+  
   const certOptions = {
-    cert: fs.readFileSync(process.env.EFI_CERT_PATH),
-    key: fs.readFileSync(process.env.EFI_CERT_PATH),
+    cert: certBuffer,
+    key: certBuffer,
     rejectUnauthorized: false
   };
 
-  // Só adiciona passphrase se ela existir e não for vazia
-  if (process.env.EFI_CERT_PASSPHRASE) {
+  // Só adiciona passphrase se ela existir e não for string vazia
+  if (process.env.EFI_CERT_PASSPHRASE && process.env.EFI_CERT_PASSPHRASE.trim()!== '') {
     certOptions.passphrase = process.env.EFI_CERT_PASSPHRASE;
+    console.log('🔐 Usando certificado com senha');
+  } else {
+    console.log('🔓 Usando certificado sem senha');
   }
 
   httpsAgent = new https.Agent(certOptions);
   console.log('✅ Certificado mTLS carregado com sucesso');
 } catch (err) {
   console.error('❌ ERRO ao carregar certificado:', err.message);
+  console.error('Verifique se o arquivo existe em:', process.env.EFI_CERT_PATH);
   process.exit(1);
 }
 
@@ -52,22 +60,21 @@ const efiApi = axios.create({
 
 // 4. Inicia Express
 const app = express();
-app.use(express.json()); // ← Habilita req.body
+app.use(express.json());
 
 // ========================================
 // ROTAS
 // ========================================
 
-// Rota de saúde
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
     servico: 'API Pix Hotspot',
-    versao: '1.0.0'
+    versao: '1.0.2',
+    ambiente: process.env.NODE_ENV || 'development'
   });
 });
 
-// Rota de teste mTLS
 app.get('/teste-efi', async (req, res) => {
   try {
     const auth = Buffer.from(
@@ -81,7 +88,8 @@ app.get('/teste-efi', async (req, res) => {
 
     res.json({
       status: 'MTLS FUNCIONOU!',
-      token_expira_em: response.data.expires_in
+      token_expira_em: response.data.expires_in,
+      certificado: process.env.EFI_CERT_PASSPHRASE? 'com senha' : 'sem senha'
     });
   } catch (err) {
     console.error('ERRO /teste-efi:', err.response?.data || err.message);
@@ -92,12 +100,10 @@ app.get('/teste-efi', async (req, res) => {
   }
 });
 
-// Rota principal: Gerar cobrança Pix
 app.post('/cobrar', async (req, res) => {
   try {
     const { valor, descricao, devedor } = req.body;
 
-    // Validações
     if (!valor) {
       return res.status(400).json({
         erro: 'Campo obrigatório faltando',
@@ -113,7 +119,6 @@ app.post('/cobrar', async (req, res) => {
       });
     }
 
-    // 1. Gera token OAuth
     console.log('🔐 Gerando token OAuth...');
     const auth = Buffer.from(
       `${process.env.EFI_CLIENT_ID}:${process.env.EFI_CLIENT_SECRET}`
@@ -126,23 +131,20 @@ app.post('/cobrar', async (req, res) => {
 
     const accessToken = tokenResponse.data.access_token;
 
-    // 2. Monta cobrança
     const bodyCob = {
-      calendario: { expiracao: 3600 }, // 1 hora
+      calendario: { expiracao: 3600 },
       valor: { original: valorFormatado },
       chave: process.env.EFI_PIX_KEY,
       solicitacaoPagador: descricao || 'Acesso WiFi Hotspot'
     };
 
-    // Adiciona devedor se enviado
     if (devedor?.nome && devedor?.cpf) {
       bodyCob.devedor = {
         nome: devedor.nome,
-        cpf: devedor.cpf.replace(/\D/g, '') // Remove pontuação
+        cpf: devedor.cpf.replace(/\D/g, '')
       };
     }
 
-    // 3. Cria cobrança na Efí
     console.log(`💰 Criando cobrança de R$ ${valorFormatado}...`);
     const cobResponse = await efiApi.post('/v2/cob', bodyCob, {
       headers: { Authorization: `Bearer ${accessToken}` }
@@ -150,7 +152,6 @@ app.post('/cobrar', async (req, res) => {
 
     const { txid, pixCopiaECola, loc } = cobResponse.data;
 
-    // 4. Busca QR Code
     console.log('📱 Gerando QR Code...');
     const qrcodeResponse = await efiApi.get(`/v2/loc/${loc.id}/qrcode`, {
       headers: { Authorization: `Bearer ${accessToken}` }
@@ -158,7 +159,6 @@ app.post('/cobrar', async (req, res) => {
 
     const qrCodeBase64 = qrcodeResponse.data.imagemQrcode;
 
-    // 5. Sucesso
     console.log(`✅ Cobrança criada: ${txid}`);
     res.json({
       status: 'Cobranca criada com sucesso',
@@ -175,12 +175,12 @@ app.post('/cobrar', async (req, res) => {
 
     res.status(500).json({
       erro: 'Falha ao gerar cobrança Pix',
-      detalhe: erroEfi?.mensagem || erroEfi?.error_description || err.message
+      detalhe: erroEfi?.mensagem || erroEfi?.error_description || err.message,
+      codigo_efi: erroEfi?.nome || erroEfi?.code
     });
   }
 });
 
-// 404 para rotas não encontradas
 app.use((req, res) => {
   res.status(404).json({ erro: 'Rota não encontrada' });
 });
