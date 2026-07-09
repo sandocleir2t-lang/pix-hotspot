@@ -71,7 +71,8 @@ app.get('/', (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
+const PORT = process.env.PORT || 10000;
+aplicativo.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
-  console.log(`📍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📍 Ambiente: ${process.env.NODE_ENV || 'desenvolvimento'}`);
 });
