@@ -23,21 +23,7 @@ for (const env of envsObrigatorias) {
 }
 
 let httpsAgent;
-try {
-  const certPath = process.env.EFI_CERT_PATH;
-  const certBuffer = fs.readFileSync(certPath);
-  
-  httpsAgent = new https.Agent({
-    cert: certBuffer,
-    key: certBuffer,
-    rejectUnauthorized: false
-  });
-  console.log('✅ Certificado mTLS.pem carregado com sucesso');
-} catch (err) {
-  console.error('❌ ERRO ao carregar certificado:', err.message);
-  process.exit(1);
-}
-
+t
 const efiApi = axios.create({
   baseURL: 'https://pix.api.efipay.com.br',
   httpsAgent: httpsAgent,
