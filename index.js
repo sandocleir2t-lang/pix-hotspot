@@ -43,7 +43,6 @@ const efiApi = axios.create({
   httpsAgent: httpsAgent,
   timeout: 30000
 });
-app.use(cors());
 const app = express();
 app.use(cors());
 app.use(express.json());
