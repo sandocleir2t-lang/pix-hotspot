@@ -2,7 +2,7 @@
 // API PIX HOTSPOT - Efí Bank + Express
 // Versão 1.0.4 - URL OAuth corrigida
 // ========================================
-
+const cors = require('cors');
 const express = require('express');
 const https = require('https');
 const fs = require('fs');
@@ -43,7 +43,7 @@ const efiApi = axios.create({
   httpsAgent: httpsAgent,
   timeout: 30000
 });
-
+app.use(cors());
 const app = express();
 app.use(express.json());
 
