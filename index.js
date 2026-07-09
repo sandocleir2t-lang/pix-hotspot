@@ -12,7 +12,7 @@ const envsObrigatorias = [
   'EFI_CLIENT_ID',
   'EFI_CLIENT_SECRET',
   'EFI_PIX_KEY',
-  'EFI_CERT_PATH'
+  'EFI_CERT_P12'
 ];
 
 for (const env of envsObrigatorias) {
