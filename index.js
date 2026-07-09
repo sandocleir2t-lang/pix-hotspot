@@ -1,13 +1,13 @@
-// ========================================
-// API PIX HOTSPOT - Efí Bank + Express
-// Versão 1.0.4 - URL OAuth corrigida
-// ========================================
-const cors = require('cors');
+require('dotenv').config();
 const express = require('express');
-const https = require('https');
-const fs = require('fs');
-const axios = require('axios');
+const cors = require('cors');
+const { EfiPay } = require('sdk-node-apis-efi');
 
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Verifica variáveis obrigatórias
 const envsObrigatorias = [
   'EFI_CLIENT_ID',
   'EFI_CLIENT_SECRET',
@@ -22,134 +22,55 @@ for (const env of envsObrigatorias) {
   }
 }
 
-let httpsAgent;
-t
-const efiApi = axios.create({
-  baseURL: 'https://pix.api.efipay.com.br',
-  httpsAgent: httpsAgent,
-  timeout: 30000
-});
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    servico: 'API Pix Hotspot',
-    versao: '1.0.4',
-    ambiente: process.env.NODE_ENV || 'development'
-  });
+// Configura Efí com certificado em base64
+const efipay = new EfiPay({
+  client_id: process.env.EFI_CLIENT_ID,
+  client_secret: process.env.EFI_CLIENT_SECRET,
+  certificate: Buffer.from(process.env.EFI_CERT_P12, 'base64'),
+  password: process.env.EFI_CERT_PASSWORD || '',
+  sandbox: false
 });
 
-app.get('/teste-efi', async (req, res) => {
+console.log('✅ Efí configurada com sucesso');
+
+// Rota pra criar cobrança Pix
+app.post('/criar-cobranca', async (req, res) => {
   try {
-    const auth = Buffer.from(
-      `${process.env.EFI_CLIENT_ID}:${process.env.EFI_CLIENT_SECRET}`
-    ).toString('base64');
-
-    // CORREÇÃO: URL é /oauth/token sem /v1
-    const response = await efiApi.post('/oauth/token',
-      { grant_type: 'client_credentials' },
-      { headers: { Authorization: `Basic ${auth}` } }
-    );
-
-    res.json({
-      status: 'MTLS FUNCIONOU!',
-      token_expira_em: response.data.expires_in
-    });
-  } catch (err) {
-    console.error('ERRO /teste-efi:', err.response?.data || err.message);
-    res.status(500).json({
-      erro: 'Falha no teste mTLS',
-      detalhe: err.response?.data || err.message
-    });
-  }
-});
-
-app.post('/cobrar', async (req, res) => {
-  try {
-    const { valor, descricao, devedor } = req.body;
+    const { valor } = req.body;
 
     if (!valor) {
-      return res.status(400).json({
-        erro: 'Campo obrigatório faltando',
-        detalhe: 'Envie: {"valor": "5.00"}'
-      });
+      return res.status(400).json({ erro: 'Valor é obrigatório' });
     }
 
-    const valorFormatado = parseFloat(valor).toFixed(2);
-    if (isNaN(valorFormatado) || valorFormatado <= 0) {
-      return res.status(400).json({
-        erro: 'Valor inválido',
-        detalhe: 'Use formato: "5.00"'
-      });
-    }
-
-    const auth = Buffer.from(
-      `${process.env.EFI_CLIENT_ID}:${process.env.EFI_CLIENT_SECRET}`
-    ).toString('base64');
-
-    // CORREÇÃO: URL é /oauth/token sem /v1
-    const tokenResponse = await efiApi.post('/oauth/token',
-      { grant_type: 'client_credentials' },
-      { headers: { Authorization: `Basic ${auth}` } }
-    );
-
-    const accessToken = tokenResponse.data.access_token;
-
-    const bodyCob = {
+    const body = {
       calendario: { expiracao: 3600 },
-      valor: { original: valorFormatado },
+      valor: { original: valor.toFixed(2) },
       chave: process.env.EFI_PIX_KEY,
-      solicitacaoPagador: descricao || 'Acesso WiFi Hotspot'
+      solicitacaoPagador: 'Pagamento Hotspot'
     };
 
-    if (devedor?.nome && devedor?.cpf) {
-      bodyCob.devedor = {
-        nome: devedor.nome,
-        cpf: devedor.cpf.replace(/\D/g, '')
-      };
-    }
-
-    const cobResponse = await efiApi.post('/v2/cob', bodyCob, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-
-    const { txid, pixCopiaECola, loc } = cobResponse.data;
-
-    const qrcodeResponse = await efiApi.get(`/v2/loc/${loc.id}/qrcode`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-
-    const qrCodeBase64 = qrcodeResponse.data.imagemQrcode;
+    const cobranca = await efipay.pixCreateImmediateCharge([], body);
+    const qrcode = await efipay.pixGenerateQRCode({ id: cobranca.loc.id });
 
     res.json({
-      status: 'Cobranca criada com sucesso',
-      txid: txid,
-      valor: valorFormatado,
-      expiraEm: '3600 segundos',
-      pixCopiaECola: pixCopiaECola,
-      qrCode: `data:image/png;base64,${qrCodeBase64}`
+      txid: cobranca.txid,
+      qrcode: qrcode.qrcode,
+      imagemQrcode: qrcode.imagemQrcode,
+      copiaECola: qrcode.qrcode
     });
 
-  } catch (err) {
-    const erroEfi = err.response?.data;
-    console.error('❌ ERRO NA ROTA /cobrar:', erroEfi || err.message);
-
-    res.status(500).json({
-      erro: 'Falha ao gerar cobrança Pix',
-      detalhe: erroEfi?.mensagem || erroEfi?.error_description || err.message,
-      codigo_efi: erroEfi?.nome || erroEfi?.code
-    });
+  } catch (error) {
+    console.error('Erro ao criar cobrança:', error);
+    res.status(500).json({ erro: error.message });
   }
 });
 
-app.use((req, res) => {
-  res.status(404).json({ erro: 'Rota não encontrada' });
+// Rota de teste
+app.get('/', (req, res) => {
+  res.json({ status: 'API Pix Online' });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
   console.log(`📍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
