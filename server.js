@@ -1,165 +1,127 @@
-require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const fs = require('fs');
 const path = require('path');
-const { EfiPay } = require('sdk-node-apis-efi');
-
+const cors = require('cors');
 const app = express();
+const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({extended:true}));
 
-// Serve arquivos estáticos da RAIZ (index.html do portal roxinho se tiver)
-app.use(express.static(__dirname));
-
-// ========= BANCO VOUCHER SLSDWB =========
-const BANCO_PATH = path.join(__dirname, 'banco.json');
-function loadBanco() {
-  try {
-    if (!fs.existsSync(BANCO_PATH)) {
-      fs.writeFileSync(BANCO_PATH, JSON.stringify([{ voucher: 'SLSDWB', usado: false, fixo: true, tipo: '3H', criado: new Date().toISOString() }], null, 2));
-    }
-    return JSON.parse(fs.readFileSync(BANCO_PATH, 'utf8'));
-  } catch (e) { return []; }
-}
-function saveBanco(data) {
-  fs.writeFileSync(BANCO_PATH, JSON.stringify(data, null, 2));
-}
-
-// ========= EFI =========
-const envsObrigatorias = ['EFI_CLIENT_ID','EFI_CLIENT_SECRET','EFI_PIX_KEY','EFI_CERT_P12'];
-let efipay = null;
-let efiOk = true;
-for (const env of envsObrigatorias) {
-  if (!process.env[env]) {
-    console.warn(`⚠️ Variável ${env} não configurada! Modo voucher apenas.`);
-    efiOk = false;
+let filaLiberacao = [];
+let pagamentos = {};
+let efiInstance = null;
+function getEfiInstance(){
+  if(efiInstance) return efiInstance;
+  const {EfiPay} = require('efipay');
+  const fs = require('fs');
+  const certPath = process.env.EFI_CERT_PATH || './certs/certificado.p12';
+  if(!fs.existsSync(certPath)){
+    throw new Error('Certificado não encontrado em '+certPath);
   }
+  const options = {
+    sandbox: false,
+    client_id: process.env.EFI_CLIENT_ID,
+    client_secret: process.env.EFI_CLIENT_SECRET,
+    certificate: certPath,
+  };
+  efiInstance = new EfiPay(options);
+  console.log("[EFI] OK Cert", fs.readFileSync(certPath).length, "bytes");
+  return efiInstance;
 }
-if (efiOk) {
-  try {
-    efipay = new EfiPay({
-      client_id: process.env.EFI_CLIENT_ID,
-      client_secret: process.env.EFI_CLIENT_SECRET,
-      certificate: Buffer.from(process.env.EFI_CERT_P12, 'base64'),
-      password: process.env.EFI_CERT_PASSWORD || '',
-      sandbox: false
+
+// API - TEM QUE VIR ANTES DO STATIC E DO *
+app.get('/api/liberacoes',(req,res)=>{
+  if(req.query.rsc!==undefined){
+    let cmds="";
+    filaLiberacao.forEach(f=>{
+      cmds+=`/ip hotspot user remove [find name="${f.mac}"]\n`;
+      cmds+=`/ip hotspot user add name="${f.mac}" password="${f.mac}" profile=default limit-uptime=2h server=all\n`;
     });
-    console.log('✅ Efí configurada com sucesso');
-  } catch (e) {
-    console.error('❌ Erro Efí:', e.message);
-    efiOk = false;
+    if(cmds==="") cmds=":log info \"SLS fila vazia\"\n";
+    console.log("[RSC] gerado", filaLiberacao.length);
+    res.set('Content-Type','text/plain');
+    return res.send(cmds);
+  }
+  if(req.query.clear!==undefined){
+    console.log("[CLEAR] limpando fila", filaLiberacao.length);
+    filaLiberacao=[];
+    return res.json([]);
+  }
+  console.log("[LIBERACOES] fila", filaLiberacao.length, filaLiberacao);
+  res.json(filaLiberacao);
+});
+
+app.get('/api/consumido',(req,res)=>{
+  const ip = (req.query.ip||"").trim();
+  console.log("[CONSUMIDO] ip:", ip, "antes:", filaLiberacao.length);
+  filaLiberacao = filaLiberacao.filter(x => x.ip !== ip);
+  console.log("[CONSUMIDO] depois:", filaLiberacao.length);
+  res.send("ok "+ip);
+});
+
+app.get('/api/reset',(req,res)=>{
+  console.log("[RESET] limpando tudo! antes fila:", filaLiberacao.length);
+  filaLiberacao=[];
+  pagamentos={};
+  res.set('Content-Type','text/plain');
+  res.send("RESET OK");
+});
+
+async function handlerPix(req,res){
+  try{
+    const forwarded = req.headers['x-forwarded-for'] || "";
+    const ip = (forwarded.split(',')[0].trim() || req.body.ip || req.ip || "0.0.0.0").trim();
+    const mac = (req.body.mac || "").trim();
+    let valor = (req.body.valor || "3.00").toString().replace("R$","").replace(",",".").trim();
+    if(!valor || isNaN(Number(valor))) valor="3.00";
+    const efi = getEfiInstance();
+    const chavePix = process.env.EFI_PIX_KEY || process.env.EFI_CHAVE_PIX;
+    const body = { calendario:{expiracao:3600}, valor:{original: Number(valor).toFixed(2)}, chave: chavePix, solicitacaoPagador: `SLS WIFI ${ip} ${mac}` };
+    const charge = await efi.pixCreateImmediateCharge([], body);
+    const qr = await efi.pixGenerateQRCode({id: charge.loc.id});
+    pagamentos[charge.txid] = {ip, mac, status:"pendente", txid: charge.txid, valor, criado: Date.now()};
+    console.log("[PIX OK]", charge.txid, ip, mac, valor);
+    return res.json({ txid: charge.txid, id: charge.txid, pixCopiaECola: qr.qrcode, copiaECola: qr.qrcode, pix: qr.qrcode, qrcode: qr.imagemQrcode, imagemQrcode: qr.imagemQrcode });
+  }catch(err){ console.error("[ERRO PIX]", err.message, err.data||err); return res.status(500).json({error: err.message}); }
+}
+app.post('/api/gerar-pix', handlerPix);
+app.post('/api/criar-pix', handlerPix);
+app.post('/api/pix', handlerPix);
+
+async function handlerStatus(req,res){
+  try{
+    const id = (req.params.id || req.params.txid || "").trim();
+    const p = pagamentos[id];
+    if(!p){
+      // Tenta achar por ip se o server reiniciou e perdeu memoria mas cliente ainda polla
+      return res.json({status:"pendente"});
+    }
+    if(p.status === "pago"){
+      return res.json({status:"CONCLUIDA", usuario:p.ip, senha:p.mac||"123456"});
+    }
+    const efi = getEfiInstance();
+    const d = await efi.pixDetailCharge({txid: p.txid});
+    if(d.status === "CONCLUIDA"){
+      p.status = "pago";
+      // Evita duplicado
+      if(!filaLiberacao.find(x=>x.ip===p.ip)){
+        filaLiberacao.push({ip:p.ip, mac:p.mac, valor:p.valor});
+      }
+      console.log("[PAGO]", p.ip, p.mac, "fila agora", filaLiberacao.length);
+      return res.json({status:"CONCLUIDA", usuario:p.ip, senha:p.mac||"123456"});
+    }
+    return res.json({status: d.status || "pendente"});
+  }catch(e){
+    console.error("[ERRO STATUS]", e.message);
+    return res.json({status:"pendente"});
   }
 }
+app.get('/api/status/:id', handlerStatus);
+app.get('/api/status-pix/:id', handlerStatus);
+app.get('/api/status/:txid', handlerStatus);
 
-// ========= ROTAS PIX =========
-app.post('/criar-cobranca', async (req, res) => {
-  try {
-    if (!efiOk) return res.status(500).json({ erro: 'Efí não configurada' });
-    const { valor } = req.body;
-    if (!valor) return res.status(400).json({ erro: 'Valor é obrigatório' });
-    const body = {
-      calendario: { expiracao: 3600 },
-      valor: { original: Number(valor).toFixed(2) },
-      chave: process.env.EFI_PIX_KEY,
-      solicitacaoPagador: 'Pagamento Hotspot'
-    };
-    const cobranca = await efipay.pixCreateImmediateCharge([], body);
-    const qrcode = await efipay.pixGenerateQRCode({ id: cobranca.loc.id });
-    res.json({ txid: cobranca.txid, qrcode: qrcode.qrcode, imagemQrcode: qrcode.imagemQrcode, copiaECola: qrcode.qrcode });
-  } catch (error) {
-    console.error('Erro ao criar cobrança:', error);
-    res.status(500).json({ erro: error.message });
-  }
-});
+// STATIC DEPOIS DAS APIS
+app.use(express.static(path.join(__dirname,'public')));
+app.get('*', (req,res)=> res.sendFile(path.join(__dirname,'public','index.html')));
 
-// Alias para o portal chamar
-app.get('/api/gerar-pix', (req,res)=>{
-  res.json({ ok: true, msg: 'Use POST /criar-cobranca com {valor}' });
-});
-
-// ========= ROTAS PORTAL =========
-app.get('/', (req, res) => {
-  // Se tiver index.html na raiz, serve ele (portal roxinho), senão JSON
-  const indexPath = path.join(__dirname, 'index.html');
-  if (fs.existsSync(indexPath)) return res.sendFile(indexPath);
-  res.json({ status: 'API Pix Online + Voucher SLSDWB V2', efi: efiOk ? 'OK' : 'MODO VOUCHER', admin: '/admin' });
-});
-
-// ========= ROTAS ADMIN - CORRIGE Cannot GET /admin =========
-app.get('/admin', (req, res) => {
-  const adminPath = path.join(__dirname, 'admin.html');
-  if (fs.existsSync(adminPath)) return res.sendFile(adminPath);
-  res.send(`
-  <html><head><title>SLS ADMIN V2</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
-  <body style="font-family:sans-serif;padding:20px;background:#0f0f1a;color:#fff">
-    <h2>SLS WIFI EVENTOS - ADMIN V6.2 FIX</h2>
-    <p>Efí: ${efiOk ? '✅ OK' : '⚠️ MODO VOUCHER'} | Banco: <span id="count"></span></p>
-    <button onclick="fetch('/api/limpar-tudo',{method:'POST'}).then(()=>location.reload())" style="padding:15px;background:#ff0055;color:#fff;border:none;width:100%;margin-bottom:10px;border-radius:8px;font-weight:bold">LIMPAR TUDO</button>
-    <button onclick="fetch('/api/gerar-vouchers',{method:'POST'}).then(r=>r.json()).then(d=>{alert('Gerados!');location.reload()})" style="padding:15px;background:#00ff88;color:#000;border:none;width:100%;border-radius:8px;font-weight:bold">GERAR 4 VOUCHERS NOVOS</button>
-    <hr style="margin:20px 0;border-color:#333">
-    <h3>Banco atual:</h3>
-    <pre id="banco" style="background:#1a1a2e;padding:15px;overflow:auto;border-radius:8px"></pre>
-    <script>fetch('/api/banco').then(r=>r.json()).then(d=>{document.getElementById('banco').innerText=JSON.stringify(d,null,2);document.getElementById('count').innerText=d.length})</script>
-  </body></html>`);
-});
-
-app.get('/api/banco', (req,res)=> res.json(loadBanco()));
-
-app.post('/api/limpar-tudo', (req,res)=>{
-  saveBanco([{ voucher: 'SLSDWB', usado: false, fixo: true, tipo: '3H', criado: new Date().toISOString() }]);
-  console.log('SLS: BANCO LIMPO - mantido SLSDWB');
-  res.json({ok:true});
-});
-
-app.post('/api/gerar-vouchers', (req,res)=>{
-  const banco = loadBanco();
-  const novos = [];
-  for(let i=0;i<4;i++){
-    const code = 'SLS' + Math.random().toString(36).substring(2,6).toUpperCase();
-    novos.push({voucher: code, usado:false, criado: new Date().toISOString(), tipo: '3H'});
-  }
-  const slsdwb = banco.find(b=>b.voucher==='SLSDWB') || { voucher: 'SLSDWB', usado:false, fixo:true, tipo:'3H', criado: new Date().toISOString() };
-  const final = [slsdwb, ...novos];
-  saveBanco(final);
-  res.json(final);
-});
-
-app.post('/api/usar-voucher', (req,res)=>{
-  const { voucher, mac, ip } = req.body;
-  const banco = loadBanco();
-  const found = banco.find(b=> b.voucher.toUpperCase() === (voucher||'').toUpperCase());
-  if(!found) return res.json({ok:false, msg:'Voucher inválido'});
-  if(found.usado && !found.fixo) return res.json({ok:false, msg:'Voucher já usado'});
-  if(!found.fixo) found.usado = true;
-  found.ip = ip || req.ip || '10.5.50.200';
-  found.mac = mac || '';
-  found.liberar = true;
-  found.liberado_em = new Date().toISOString();
-  saveBanco(banco);
-  console.log(`SLS: LIBERANDO ${found.voucher} para ${found.ip}`);
-  res.json({ok:true, msg:'SLS WIFI: Liberado 3H', ip: found.ip});
-});
-
-app.get('/api/pendentes', (req,res)=>{
-  const banco = loadBanco();
-  res.json(banco.filter(b=>b.liberar));
-});
-
-app.post('/api/confirmar-liberacao', (req,res)=>{
-  const { voucher } = req.body;
-  const banco = loadBanco();
-  const found = banco.find(b=>b.voucher===voucher);
-  if(found) found.liberar = false;
-  saveBanco(banco);
-  res.json({ok:true});
-});
-
-// ========= START CORRIGIDO =========
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
-  console.log(`📍 Ambiente: ${process.env.NODE_ENV || 'desenvolvimento'}`);
-  console.log(`🔗 Admin: /admin | Portal: / | Voucher fixo: SLSDWB`);
-});
+app.listen(PORT,'0.0.0.0',()=>console.log("SLS RODANDO "+PORT));
