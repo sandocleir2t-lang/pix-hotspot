@@ -107,5 +107,10 @@ app.get('/api/consumido/:ip', (req,res)=> res.json({ok:true}));
 app.get('/status/:txid', (req,res)=> res.json(fila.find(f=>f.txid===req.params.txid) || {status:'NAO_ENCONTRADO'}));
 app.get('/fila', (req,res)=> res.json(fila));
 app.get('/configurar-webhook', async (req,res)=>{ try{ const r = await efipay.pixConfigWebhook({chave: process.env.EFI_PIX_KEY}, {webhookUrl: 'https://hotsport-pix-2.onrender.com/webhook'}); res.json(r); }catch(e){res.json(e)} });
-
+app.get('/api/liberacoes-txt', (req,res)=>{
+  const pendentes = fila.filter(f=>f.status==='CONCLUIDA');
+  let txt = "";
+  pendentes.forEach(f=>{ txt += `${f.ip},${f.mac},${f.velocidade},${f.tempoMin}\n`; });
+  res.type('text/plain').send(txt);
+});
 app.listen(process.env.PORT || 3000, ()=> console.log('SLS v9.1 RODANDO COM SUAS ENVS'));
