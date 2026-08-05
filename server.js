@@ -97,4 +97,34 @@ app.post('/webhook', async (req, res) => {
 // --- FIX 1: AGORA APAGA DA FILA DE VERDADE ---
 app.get('/api/liberacoes', (req,res)=>{ const ativos = fila.filter(f=> f.status==='CONCLUIDA' && f.expiraEm > Date.now()); res.json(ativos); });
 app.get('/api/consumido/:ip', (req,res)=>{
-  console.log('CONSUMIDO:
+  console.log('CONSUMIDO: '+req.params.ip);
+  fila = fila.filter(f=>f.ip!==req.params.ip);
+  salvar();
+  res.json({ok:true, restante:fila.length});
+});
+app.get('/status/:txid', (req,res)=> res.json(fila.find(f=>f.txid===req.params.txid) || {status:'NAO_ENCONTRADO'}));
+app.get('/fila', (req,res)=> res.json(fila));
+app.get('/configurar-webhook', async (req,res)=>{ try{ const r = await efipay.pixConfigWebhook({chave: process.env.EFI_PIX_KEY}, {webhookUrl: 'https://hotsport-pix-2.onrender.com/webhook'}); res.json(r); }catch(e){res.json(e)} });
+app.get('/api/liberacoes-txt', (req,res)=>{
+  const pendentes = fila.filter(f=>f.status==='CONCLUIDA' && f.expiraEm > Date.now());
+  let txt = ""; pendentes.forEach(f=>{ txt += `${f.ip},${f.mac},${f.velocidade},${f.tempoMin}\n`; });
+  res.type('text/plain').send(txt);
+});
+
+// --- FIX 2: POLLING QUE SALVA O FREE ---
+setInterval(async ()=>{
+  const pendentes = fila.filter(f=>f.status==='ATIVA');
+  if(pendentes.length===0) return;
+  console.log('POLLING FREE verificando '+pendentes.length+' pendentes');
+  for(const f of pendentes){
+    try{
+      const det = await efipay.pixDetailCharge({txid:f.txid});
+      if(det.status==='CONCLUIDA'){
+        console.log('POLLING ACHOU PAGO: '+f.txid+' IP '+f.ip);
+        f.status='CONCLUIDA'; f.expiraEm=getExp(f.tempoMin); salvar();
+      }
+    }catch(e){}
+  }
+}, 30000);
+
+app.listen(process.env.PORT || 3000, ()=> console.log('SLS v9.2 FIX FREE RODANDO COM SUAS ENVS - POLLING ATIVO'));
