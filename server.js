@@ -1,4 +1,4 @@
-// server.js v9.1 SLS WIFI - FINAL 100% - COMPATÍVEL COM SEU PRINT
+// server.js v9.2 SLS WIFI - FIX 404 + POLLING FREE - SEU 116 LINHAS CONSERTADO
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -7,17 +7,14 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// SEUS PLANOS
 const PLANOS = {
   "1H": { valor: 2.00, tempo: 60, vel: "5M/5M", nome: "1 HORA - 5MB" },
   "2H": { valor: 5.00, tempo: 120, vel: "10M/10M", nome: "2 HORAS - 10MB" },
   "EVENTO": { valor: 12.00, tempo: 720, vel: "10M/10M", nome: "EVENTO 12H" }
 };
 
-// --- AJUSTE PARA SUAS ENVS DO PRINT ---
 let certPath = './certs/certificado.p12';
 try {
-  // Seu EFI_CERT_P12 é base64, vamos salvar em /tmp
   if (process.env.EFI_CERT_P12) {
     const buffer = Buffer.from(process.env.EFI_CERT_P12, 'base64');
     fs.writeFileSync('/tmp/cert.p12', buffer);
@@ -41,17 +38,15 @@ const efipay = new EfiPay({
 
 const getExp = (min) => Date.now() + (min * 60 * 1000);
 
-// ROTA PRINCIPAL - MOSTRA OS PLANOS E GERA PIX
 app.get('/', async (req, res) => {
   const { plano, valor, mac, ip } = req.query;
-  // Se já veio com plano do login.html, gera direto
   if(plano && PLANOS[plano]){
      try{
        const p = PLANOS[plano];
        const body = {
          calendario: { expiracao: 600 },
          valor: { original: p.valor.toFixed(2) },
-         chave: process.env.EFI_PIX_KEY, // SEU NOME DO PRINT
+         chave: process.env.EFI_PIX_KEY,
          infoAdicionais: [
            { nome: "plano", valor: plano },
            { nome: "mac", valor: mac || "00:00:00:00" },
@@ -64,8 +59,6 @@ app.get('/', async (req, res) => {
        const qr = await efipay.pixGenerateQRCode({ id: cob.loc.id });
        const item = { txid: cob.txid, plano, mac, ip, tempoMin: p.tempo, velocidade: p.vel, status: 'ATIVA', expiraEm: getExp(p.tempo), criadoEm: Date.now() };
        fila = fila.filter(f=>f.txid!==cob.txid); fila.push(item); salvar();
-
-       // HTML DO QR CODE
        return res.send(`
          <html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#1a0b2e;color:#fff;font-family:Arial;text-align:center;padding:20px}.qr{background:#fff;padding:15px;border-radius:15px;width:280px;margin:20px auto}h1{color:#a855f7}</style></head><body>
          <h1>SLS WIFI - ${p.nome}</h1><h2>R$ ${p.valor.toFixed(2)}</h2>
@@ -80,16 +73,15 @@ app.get('/', async (req, res) => {
          </script></body></html>`);
      }catch(e){ return res.send('Erro gerar PIX: '+e.message); }
   }
-  res.send('SLS v9.1 OK - Use com?plano=1H&mac=XX&ip=XX');
+  res.send('SLS v9.2 FIX FREE OK - Use com?plano=1H&mac=XX&ip=XX');
 });
 
-// WEBHOOK ANTI-DEPLOY
 app.post('/webhook', async (req, res) => {
-  console.log('Webhook recebido');
+  console.log('WEBHOOK RECEBIDO:', JSON.stringify(req.body));
   const pixList = req.body.pix || [];
   for(let p of pixList){
     let idx = fila.findIndex(f=>f.txid===p.txid);
-    if(idx>=0){ fila[idx].status='CONCLUIDA'; salvar(); console.log('Liberado local', p.txid); }
+    if(idx>=0){ fila[idx].status='CONCLUIDA'; fila[idx].expiraEm=getExp(fila[idx].tempoMin); salvar(); console.log('Liberado local', p.txid); }
     else {
       try{
         console.log('Fila vazia, recuperando da EFI:', p.txid);
@@ -102,15 +94,7 @@ app.post('/webhook', async (req, res) => {
   res.json({ok:true});
 });
 
+// --- FIX 1: AGORA APAGA DA FILA DE VERDADE ---
 app.get('/api/liberacoes', (req,res)=>{ const ativos = fila.filter(f=> f.status==='CONCLUIDA' && f.expiraEm > Date.now()); res.json(ativos); });
-app.get('/api/consumido/:ip', (req,res)=> res.json({ok:true}));
-app.get('/status/:txid', (req,res)=> res.json(fila.find(f=>f.txid===req.params.txid) || {status:'NAO_ENCONTRADO'}));
-app.get('/fila', (req,res)=> res.json(fila));
-app.get('/configurar-webhook', async (req,res)=>{ try{ const r = await efipay.pixConfigWebhook({chave: process.env.EFI_PIX_KEY}, {webhookUrl: 'https://hotsport-pix-2.onrender.com/webhook'}); res.json(r); }catch(e){res.json(e)} });
-app.get('/api/liberacoes-txt', (req,res)=>{
-  const pendentes = fila.filter(f=>f.status==='CONCLUIDA');
-  let txt = "";
-  pendentes.forEach(f=>{ txt += `${f.ip},${f.mac},${f.velocidade},${f.tempoMin}\n`; });
-  res.type('text/plain').send(txt);
-});
-app.listen(process.env.PORT || 3000, ()=> console.log('SLS v9.1 RODANDO COM SUAS ENVS'));
+app.get('/api/consumido/:ip', (req,res)=>{
+  console.log('CONSUMIDO:
